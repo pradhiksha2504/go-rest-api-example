@@ -1,54 +1,40 @@
 package handlers
 
 import (
-	"net/http"
-
-	"github.com/rameshsunkara/go-rest-api-example/internal/db"
-
-	"github.com/rs/zerolog/log"
-
-	"github.com/gin-gonic/gin"
+    "database/sql"
+    "log"
+    _ "github.com/go-sql-driver/mysql" // MySQL driver
 )
 
-type ServiceStatus string
-
-const (
-	UP   ServiceStatus = "ok"
-	DOWN ServiceStatus = "down"
-)
-
-type StatusResponse struct {
-	Status      ServiceStatus
-	ServiceName string
-	UpTime      string
-	Environment string
-	Version     string
+type DBMgr struct {
+    db *sql.DB
 }
 
-type StatusController struct {
-	dbMgr db.MongoManager
+// Ping checks if the database connection is alive.
+func (d *DBMgr) Ping() error {
+    return d.db.Ping()
 }
 
-func NewStatusController(m db.MongoManager) *StatusController {
-	return &StatusController{
-		dbMgr: m,
-	}
+type StatusHandler struct {
+    dbMgr *DBMgr
 }
 
-// CheckStatus - Checks the health of all the dependencies of the service to ensure complete serviceability.
-func (s *StatusController) CheckStatus(c *gin.Context) {
-	var stat ServiceStatus
-	var code int
+func (s *StatusHandler) HandleRequest() {
+    if err := s.dbMgr.Ping(); err != nil {
+        log.Printf("Database connection failed: %v", err)
+        // Handle the error appropriately (e.g., return an error response)
+        return
+    }
+    log.Println("Database is connected.")
+    // Proceed with handling the request
+}
 
-	if err := s.dbMgr.Ping(); err == nil {
-		stat = UP
-		code = http.StatusOK
-	} else {
-		log.Error().Msg("unable to connect to DB")
-		stat = DOWN
-		code = http.StatusFailedDependency
-	}
-
-	// send response
-	c.JSON(code, stat)
+func main() {
+    db, err := sql.Open("mysql", "user:password@tcp(localhost:3306)/dbname")
+    if err != nil {
+        log.Fatal(err)
+    }
+    dbMgr := &DBMgr{db: db}
+    handler := &StatusHandler{dbMgr: dbMgr}
+    handler.HandleRequest()
 }

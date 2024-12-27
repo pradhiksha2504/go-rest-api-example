@@ -1,6 +1,7 @@
 package external
 
 import (
+	"time"
 	"github.com/rameshsunkara/go-rest-api-example/internal/models/data"
 )
 
@@ -26,13 +27,13 @@ type ProductInput struct {
 
 // Order represents the structure of an order.
 type Order struct {
-	ID          string             `json:"orderId"`
-	Version     int64              `json:"version"`
-	CreatedAt   string             `json:"createdAt"`
-	UpdatedAt   string             `json:"updatedAt"`
-	Products    []data.Product     `json:"products"`
-	User        string             `json:"user"`
-	TotalAmount float64            `json:"totalAmount"`
-	Status      data.OrderStatus   `json:"status"`
-	Updates     []data.OrderUpdate `json:"updates"`
+	ID          uint64            `json:"orderId"`          // Changed to uint64 to match database type
+	Version     int64             `json:"version"`          // Version for optimistic locking
+	CreatedAt   time.Time         `gorm:"autoCreateTime" json:"createdAt"` // Automatically set at creation
+	UpdatedAt   time.Time         `gorm:"autoUpdateTime" json:"updatedAt"` // Automatically updated at modification
+	Products    []data.Product    `json:"products"`         // Associated products in the order
+	User        string            `json:"user"`             // User who placed the order
+	TotalAmount float64           `json:"totalAmount"`      // Total price of the order
+	Status      data.OrderStatus  `json:"status"`           // Current order status
+	Updates     []data.OrderUpdate `json:"updates"`         // Order updates history
 }

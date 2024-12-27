@@ -1,31 +1,49 @@
 package mocks
 
 import (
+	"database/sql"
+
 	"github.com/rameshsunkara/go-rest-api-example/internal/db"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 var (
 	PingFunc func() error
 )
 
-type MockMongoMgr struct{}
+type MockSQLMgr struct{}
 
-func (m *MockMongoMgr) Ping() error {
+func (m *MockSQLMgr) Ping() error {
 	return PingFunc()
 }
 
-func (m *MockMongoMgr) Database() db.MongoDatabase {
-	return &MockMongoDataBase{}
+func (m *MockSQLMgr) Database() db.SQLDatabase {
+	return &MockSQLDatabase{}
 }
 
-func (m *MockMongoMgr) Disconnect() error {
+func (m *MockSQLMgr) Disconnect() error {
 	return nil
 }
 
-type MockMongoDataBase struct{}
+type MockSQLDatabase struct {
+	DB *sql.DB
+}
 
-func (m *MockMongoDataBase) Collection(_ string, _ ...*options.CollectionOptions) *mongo.Collection {
+func (m *MockSQLDatabase) Query(query string, args ...interface{}) (*sql.Rows, error) {
+	// Mock the response for a query
+	return nil, nil
+}
+
+func (m *MockSQLDatabase) Exec(query string, args ...interface{}) (sql.Result, error) {
+	// Mock the response for an execution query
+	return nil, nil
+}
+
+func (m *MockSQLDatabase) Prepare(query string) (*sql.Stmt, error) {
+	// Mock the response for prepared statements
+	return nil, nil
+}
+
+func (m *MockSQLDatabase) Close() error {
+	// Mock the close operation
 	return nil
 }

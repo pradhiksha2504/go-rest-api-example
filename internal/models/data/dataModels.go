@@ -2,8 +2,6 @@ package data
 
 import (
 	"time"
-
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // OrderStatus represents the status of an order.
@@ -19,30 +17,34 @@ const (
 
 // Order represents the structure of an order.
 type Order struct {
-	ID          primitive.ObjectID `bson:"_id,omitempty" json:"orderId"`
-	Version     int64              `json:"version" bson:"version"`
-	CreatedAt   time.Time          `json:"createdAt" bson:"createdAt"`
-	UpdatedAt   time.Time          `json:"updatedAt" bson:"updatedAt"`
-	Products    []Product          `json:"products" bson:"products"`
-	User        string             `json:"user" bson:"user"`
-	TotalAmount float64            `json:"totalAmount" bson:"totalAmount"`
-	Status      OrderStatus        `json:"status" bson:"status"`
-	Updates     []OrderUpdate      `json:"updates" bson:"updates"`
+	ID          uint64        `gorm:"primaryKey;autoIncrement" json:"orderId"`        // Primary Key
+	Version     int64         `gorm:"default:0" json:"version"`                       // Version control for optimistic locking
+	CreatedAt   time.Time     `gorm:"autoCreateTime" json:"createdAt"`                // Automatically set at creation
+	UpdatedAt   time.Time     `gorm:"autoUpdateTime" json:"updatedAt"`                // Automatically updated at modification
+	Products    []Product     `gorm:"foreignKey:OrderID;constraint:OnDelete:CASCADE;" json:"products"` // Products linked to the order
+	User        string        `gorm:"size:255;not null" json:"user"`                  // User ID or name associated with the order
+	TotalAmount float64       `gorm:"not null" json:"totalAmount"`                    // Total price of the order
+	Status      OrderStatus   `gorm:"type:enum('OrderPending','OrderProcessing','OrderShipped','OrderDelivered','OrderCancelled');default:'OrderPending'" json:"status"` // Current status of the order
+	Updates     []OrderUpdate `gorm:"foreignKey:OrderID;constraint:OnDelete:CASCADE;" json:"updates"`   // Updates linked to the order
 }
 
 // OrderUpdate represents the structure of an order update.
 type OrderUpdate struct {
-	UpdatedAt time.Time `json:"updatedAt" bson:"updatedAt"`
-	Notes     string    `json:"notes" bson:"notes"`
-	HandledBy string    `json:"handledBy" bson:"handledBy"`
+	ID        uint64    `gorm:"primaryKey;autoIncrement" json:"id"`             // Primary Key
+	OrderID   uint64    `gorm:"not null" json:"orderId"`                        // Foreign Key linking to the Order table
+	UpdatedAt time.Time `gorm:"autoUpdateTime" json:"updatedAt"`                // Time of update
+	Notes     string    `gorm:"size:1024" json:"notes"`                         // Notes about the update
+	HandledBy string    `gorm:"size:255" json:"handledBy"`                      // Person who handled the update
 }
 
 // Product represents the structure of a product.
 type Product struct {
-	Name      string    `json:"name" bson:"name"`
-	UpdatedAt time.Time `json:"updatedAt" bson:"updatedAt"`
-	Price     float64   `json:"price" bson:"price"`
-	Status    string    `json:"status" bson:"status"`
-	Remarks   string    `json:"remarks" bson:"remarks"`
-	Quantity  uint64    `json:"quantity"`
+	ID        uint64    `gorm:"primaryKey;autoIncrement" json:"id"`           // Primary Key
+	Name      string    `gorm:"size:255;not null" json:"name"`                // Name of the product
+	OrderID   uint64    `gorm:"not null" json:"orderId"`                      // Foreign Key linking to the Order table
+	UpdatedAt time.Time `gorm:"autoUpdateTime" json:"updatedAt"`              // Time of the last update
+	Price     float64   `gorm:"not null" json:"price"`                        // Price of the product
+	Status    string    `gorm:"size:255" json:"status"`                       // Status of the product
+	Remarks   string    `gorm:"size:1024" json:"remarks"`                     // Additional remarks about the product
+	Quantity  uint64    `gorm:"not null" json:"quantity"`                     // Quantity of the product
 }

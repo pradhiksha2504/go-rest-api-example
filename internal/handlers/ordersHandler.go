@@ -1,263 +1,133 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/go-faker/faker/v4"
-	"github.com/rameshsunkara/go-rest-api-example/internal/db"
-	"github.com/rameshsunkara/go-rest-api-example/internal/errors"
 	"github.com/rameshsunkara/go-rest-api-example/internal/logger"
 	"github.com/rameshsunkara/go-rest-api-example/internal/models/data"
-	"github.com/rameshsunkara/go-rest-api-example/internal/models/external"
-	"github.com/rameshsunkara/go-rest-api-example/internal/util"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"gorm.io/gorm"
 )
 
 const (
-	OrderIDPath = "id" // Request path variable
-	MaxPageSize = 100  // Maximum number of records that can be fetched in a single request
+	OrdersTable     = "orders"
+	DefaultPageSize = 100
 )
 
-type OrdersHandler struct {
-	oDataSvc db.OrdersDataService
-	logger   *logger.AppLogger
+type OrdersRepo struct {
+	DB     *gorm.DB
+	Logger *logger.AppLogger
 }
 
-func NewOrdersHandler(dSvc db.OrdersDataService, lgr *logger.AppLogger) *OrdersHandler {
-	o := &OrdersHandler{
-		oDataSvc: dSvc,
-		logger:   lgr,
-	}
-	return o
+func NewOrdersRepo(db *gorm.DB, lgr *logger.AppLogger) *OrdersRepo {
+	return &OrdersRepo{DB: db, Logger: lgr}
 }
 
-func (o *OrdersHandler) Create(c *gin.Context) {
-	lgr, requestID := o.logger.WithReqID(c)
-	// Validate  inputs : fail fast order
-	// Parse request body
-	var orderInput external.OrderInput
-	if err := c.ShouldBindJSON(&orderInput); err != nil {
-		apiErr := &external.APIError{
-			HTTPStatusCode: http.StatusBadRequest,
-			ErrorCode:      errors.OrderCreateInvalidInput,
-			Message:        "Invalid order request body",
-			DebugID:        requestID,
+var ErrInvalidID = errors.New("invalid order ID")
+var ErrPOIDNotFound = errors.New("purchase order ID not found")
+
+// Create handles the creation of a new order
+func (o *OrdersRepo) Create() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var po data.Order
+		if err := c.ShouldBindJSON(&po); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid input"})
+			return
 		}
-		lgr.Error().
-			Err(err).
-			Int("HttpStatusCode", apiErr.HTTPStatusCode).
-			Str("ErrorCode", apiErr.ErrorCode).
-			Msg(apiErr.Message)
-		c.AbortWithStatusJSON(apiErr.HTTPStatusCode, apiErr)
-		return
-	}
 
-	// Convert ProductInput to Product
-	var products []data.Product
-	for _, productInput := range orderInput.Products {
-		product := data.Product{
-			Name:     productInput.Name,
-			Price:    productInput.Price,
-			Quantity: productInput.Quantity,
+		// Create the order using GORM's Create method
+		if err := o.DB.Create(&po).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
 		}
-		products = append(products, product)
-	}
 
-	// Create new Order object
-	order := data.Order{
-		Version:     1,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-		Products:    products,
-		User:        faker.Email(), // TODO: Replace with actual user email from trusted source such as JWT token
-		TotalAmount: util.CalculateTotalAmount(products),
-		Status:      data.OrderPending,
+		c.JSON(http.StatusOK, gin.H{"id": po.ID})
 	}
-
-	if id, err := o.oDataSvc.Create(c, &order); err == nil {
-		// Return success response
-		extOrder := external.Order{
-			ID:          id,
-			CreatedAt:   util.FormatTimeToISO(order.CreatedAt),
-			UpdatedAt:   util.FormatTimeToISO(order.UpdatedAt),
-			Products:    order.Products,
-			User:        order.User,
-			TotalAmount: order.TotalAmount,
-			Status:      order.Status,
-			Version:     order.Version,
-		}
-		c.JSON(http.StatusCreated, extOrder)
-		return
-	}
-
-	apiErr := &external.APIError{
-		HTTPStatusCode: http.StatusInternalServerError,
-		ErrorCode:      errors.OrderCreateServerError,
-		Message:        errors.UnexpectedErrorMessage,
-		DebugID:        requestID,
-	}
-	lgr.Error().
-		Int("HttpStatusCode", apiErr.HTTPStatusCode).
-		Str("ErrorCode", apiErr.ErrorCode).
-		Msg(apiErr.Message)
-	c.AbortWithStatusJSON(apiErr.HTTPStatusCode, apiErr)
 }
 
-func (o *OrdersHandler) GetAll(c *gin.Context) {
-	lgr, requestID := o.logger.WithReqID(c)
-	// Validate  inputs : fail fast order
-	// Parse query params
-	limit, apiErr := o.parseLimitQueryParam(c)
-	if apiErr != nil {
-		c.AbortWithStatusJSON(apiErr.HTTPStatusCode, apiErr)
-		return
-	}
-
-	orders, err := o.oDataSvc.GetAll(c, limit)
-	var extOrders []external.Order
-	if orders != nil {
-		extOrders = make([]external.Order, len(*orders))
-		for i, o := range *orders {
-			extOrders[i] = external.Order{
-				ID:          o.ID.Hex(),
-				Version:     o.Version,
-				Status:      o.Status,
-				TotalAmount: o.TotalAmount,
-				User:        o.User,
-				CreatedAt:   util.FormatTimeToISO(o.CreatedAt),
-				UpdatedAt:   util.FormatTimeToISO(o.UpdatedAt),
-				Products:    o.Products,
-			}
+// Update handles updating an order
+func (o *OrdersRepo) Update() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var po data.Order
+		if err := c.ShouldBindJSON(&po); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid input"})
+			return
 		}
-	}
 
-	if err != nil {
-		aErr := &external.APIError{
-			HTTPStatusCode: http.StatusInternalServerError,
-			ErrorCode:      errors.OrdersGetServerError,
-			Message:        errors.UnexpectedErrorMessage,
-			DebugID:        requestID,
+		// Update the order using GORM's Save method
+		if err := o.DB.Save(&po).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
 		}
-		lgr.Error().
-			Int("HttpStatusCode", aErr.HTTPStatusCode).
-			Str("ErrorCode", aErr.ErrorCode).
-			Msg(aErr.Message)
-		c.AbortWithStatusJSON(aErr.HTTPStatusCode, aErr)
-		return
+
+		c.JSON(http.StatusOK, gin.H{"message": "Order updated successfully"})
 	}
-	c.JSON(http.StatusOK, extOrders)
 }
 
-func (o *OrdersHandler) GetByID(c *gin.Context) {
-	lgr, requestID := o.logger.WithReqID(c)
-	id := c.Param(OrderIDPath)
-	oID, err := primitive.ObjectIDFromHex(id)
-	if oID.IsZero() || err != nil {
-		aErr := &external.APIError{
-			HTTPStatusCode: http.StatusBadRequest,
-			ErrorCode:      "",
-			Message:        "invalid order ID",
-			DebugID:        requestID,
-		}
-		lgr.Error().
-			Int("HttpStatusCode", aErr.HTTPStatusCode).
-			Str("ErrorCode", aErr.ErrorCode).
-			Msg(aErr.Message)
-		c.AbortWithStatusJSON(aErr.HTTPStatusCode, aErr)
-		return
-	}
-	order, err := o.oDataSvc.GetByID(c, oID)
-	if err != nil {
-		aErr := &external.APIError{
-			HTTPStatusCode: http.StatusInternalServerError,
-			ErrorCode:      "",
-			Message:        "fill this in with a meaningful error message",
-			DebugID:        requestID,
-		}
-		lgr.Error().
-			Int("HttpStatusCode", aErr.HTTPStatusCode).
-			Str("ErrorCode", aErr.ErrorCode).
-			Msg(aErr.Message)
-		c.AbortWithStatusJSON(aErr.HTTPStatusCode, aErr)
-		return
-	}
-	c.JSON(http.StatusOK, order)
-}
-
-func (o *OrdersHandler) DeleteByID(c *gin.Context) {
-	lgr, requestID := o.logger.WithReqID(c)
-	id := c.Param(OrderIDPath)
-	oID, err := primitive.ObjectIDFromHex(id)
-	if oID.IsZero() || err != nil {
-		aErr := &external.APIError{
-			HTTPStatusCode: http.StatusBadRequest,
-			ErrorCode:      "",
-			Message:        "invalid order ID",
-			DebugID:        requestID,
-		}
-		lgr.Error().
-			Int("HttpStatusCode", aErr.HTTPStatusCode).
-			Str("ErrorCode", aErr.ErrorCode).
-			Msg(aErr.Message)
-		c.AbortWithStatusJSON(aErr.HTTPStatusCode, aErr)
-		return
-	}
-	dErr := o.oDataSvc.DeleteByID(c, oID)
-	if dErr != nil {
-		aErr := &external.APIError{
-			HTTPStatusCode: http.StatusInternalServerError,
-			ErrorCode:      "",
-			Message:        "fill this in with a meaningful error message",
-			DebugID:        requestID,
-		}
-		lgr.Error().
-			Int("HttpStatusCode", aErr.HTTPStatusCode).
-			Str("ErrorCode", aErr.ErrorCode).
-			Msg(aErr.Message)
-		c.AbortWithStatusJSON(aErr.HTTPStatusCode, aErr)
-		return
-	}
-	c.JSON(http.StatusNoContent, nil)
-}
-
-func (o *OrdersHandler) parseLimitQueryParam(c *gin.Context) (int64, *external.APIError) {
-	lgr, requestID := o.logger.WithReqID(c)
-	l := db.DefaultPageSize
-	if input, exists := c.GetQuery("limit"); exists && input != "" {
-		var err error
-		l, err = strconv.Atoi(input)
+// GetAll handles retrieving all orders
+func (o *OrdersRepo) GetAll() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		limit := DefaultPageSize
+		queryLimit := c.DefaultQuery("limit", fmt.Sprintf("%d", limit))
+		
+		parsedLimit, err := strconv.ParseInt(queryLimit, 10, 64)
 		if err != nil {
-			apiErr := &external.APIError{
-				HTTPStatusCode: http.StatusBadRequest,
-				ErrorCode:      "",
-				Message: fmt.Sprintf("Integer value within 1 and %d is expected for limit query param",
-					MaxPageSize),
-				DebugID: requestID,
-			}
-			lgr.Error().
-				Int("HttpStatusCode", apiErr.HTTPStatusCode).
-				Str("ErrorCode", apiErr.ErrorCode).
-				Msg(apiErr.Message)
-			return 0, apiErr
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid limit parameter"})
+			return
 		}
-		if l < 1 || l > MaxPageSize {
-			apiErr := &external.APIError{
-				HTTPStatusCode: http.StatusBadRequest,
-				ErrorCode:      "",
-				Message: fmt.Sprintf("Integer value within 1 and %d is expected for limit query param",
-					MaxPageSize),
-				DebugID: requestID,
-			}
-			lgr.Error().
-				Int("HttpStatusCode", apiErr.HTTPStatusCode).
-				Str("ErrorCode", apiErr.ErrorCode).
-				Msg(apiErr.Message)
-			return 0, apiErr
+
+		var orders []data.Order
+		if err := o.DB.Limit(int(parsedLimit)).Find(&orders).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
 		}
+
+		c.JSON(http.StatusOK, orders)
 	}
-	return int64(l), nil
+}
+
+func (o *OrdersRepo) GetByID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		orderID, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order ID"})
+			return
+		}
+
+		var order data.Order
+		if err := o.DB.First(&order, orderID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": ErrPOIDNotFound.Error()})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, order)
+	}
+}
+
+// DeleteByID handles deleting an order by its ID
+func (o *OrdersRepo) DeleteByID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		orderID, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order ID"})
+			return
+		}
+
+		// Delete the order using GORM's Delete method
+		if err := o.DB.Delete(&data.Order{}, orderID).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Order deleted successfully"})
+	}
 }

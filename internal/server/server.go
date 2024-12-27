@@ -1,17 +1,19 @@
 package server
 
 import (
+	// "database/sql"
 	"io"
+	"log"
 	"sync"
+	"gorm.io/gorm"
 
 	"github.com/gin-contrib/gzip"
-	"github.com/rameshsunkara/go-rest-api-example/internal/logger"
-
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rameshsunkara/go-rest-api-example/internal/db"
 	"github.com/rameshsunkara/go-rest-api-example/internal/handlers"
+	"github.com/rameshsunkara/go-rest-api-example/internal/logger"
 	"github.com/rameshsunkara/go-rest-api-example/internal/middleware"
 	"github.com/rameshsunkara/go-rest-api-example/internal/models"
 	"github.com/rameshsunkara/go-rest-api-example/internal/util"
@@ -19,17 +21,17 @@ import (
 
 var startOnce sync.Once
 
-func StartService(svcEnv models.ServiceEnv, dbMgr db.MongoManager, lgr *logger.AppLogger) {
+func StartService(svcEnv models.ServiceEnv, dbConn *gorm.DB, lgr *logger.AppLogger) {
 	startOnce.Do(func() {
-		r := WebRouter(svcEnv, dbMgr, lgr)
+		r := WebRouter(svcEnv, dbConn, lgr)
 		err := r.Run(":" + svcEnv.Port)
 		if err != nil {
-			panic(err)
+			log.Fatalf("Failed to start the service: %v", err)
 		}
 	})
 }
 
-func WebRouter(svcEnv models.ServiceEnv, dbMgr db.MongoManager, lgr *logger.AppLogger) *gin.Engine {
+func WebRouter(svcEnv models.ServiceEnv, dbConn *gorm.DB, lgr *logger.AppLogger) *gin.Engine {
 	ginMode := gin.ReleaseMode
 	if util.IsDevMode(svcEnv.Name) {
 		ginMode = gin.DebugMode
@@ -47,37 +49,54 @@ func WebRouter(svcEnv models.ServiceEnv, dbMgr db.MongoManager, lgr *logger.AppL
 	router.Use(middleware.RequestLogMiddleware(lgr))
 	router.Use(gin.Recovery())
 
+	// Internal Routes
 	internalAPIGrp := router.Group("/internal")
 	internalAPIGrp.Use(middleware.AuthMiddleware())
 	pprof.RouteRegister(internalAPIGrp, "pprof")
 	router.GET("/metrics", gin.WrapH(promhttp.Handler())) // /metrics
-	status := handlers.NewStatusController(dbMgr)
-	router.GET("/status", status.CheckStatus) // /status
 
-	// Dependencies for handlers
-	d := dbMgr.Database()
-	orders := db.NewOrdersRepo(d, lgr)
+	// Handlers
+	ordersRepo := handlers.NewOrdersRepo(dbConn, lgr)
+	// productsRepo := handlers.NewProductsRepo(dbConn, lgr)
 
-	// This is a dev mode only route to seed the local db
+	// Dev Mode Route to Seed DB
 	if util.IsDevMode(svcEnv.Name) {
-		seed := handlers.NewDataSeedHandler(orders)
-		internalAPIGrp.POST("/seed-local-db", seed.SeedDB) // /seedDB
+		seedHandler := handlers.NewDataSeedHandler(db.NewOrdersDataService((*db.OrdersRepo)(ordersRepo)))
+		internalAPIGrp.POST("/seed-local-db", func(c *gin.Context) {
+			if err := seedHandler.SeedDB(); err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+			} else {
+				c.JSON(200, gin.H{"message": "Database seeded successfully"})
+			}
+		})
 	}
 
-	// Routes - Ecommerce
+	// Routes - E-commerce
 	externalAPIGrp := router.Group("/ecommerce/v1")
 	externalAPIGrp.Use(middleware.AuthMiddleware())
 	externalAPIGrp.Use(middleware.QueryParamsCheckMiddleware(lgr))
 	{
-		ordersGroup := externalAPIGrp.Group("orders")
-		{
-			orders := handlers.NewOrdersHandler(orders, lgr)
-			ordersGroup.GET("", orders.GetAll)
-			ordersGroup.GET("/:id", orders.GetByID)
-			ordersGroup.POST("", orders.Create)
-			ordersGroup.DELETE("/:id", orders.DeleteByID)
-		}
+		// Server.go
+ordersGroup := externalAPIGrp.Group("orders")
+productsGroup := externalAPIGrp.Group("products")
+{
+    ordersHandler := handlers.NewOrdersRepo(ordersRepo.DB, lgr)
+    
+    // Call the functions returned by GetAll, GetByID, Create, and DeleteByID
+    ordersGroup.GET("", ordersHandler.GetAll())         // Use the returned gin.HandlerFunc
+    ordersGroup.GET("/:id", ordersHandler.GetByID())     // Use the returned gin.HandlerFunc
+    ordersGroup.POST("", ordersHandler.Create())         // Use the returned gin.HandlerFunc
+    ordersGroup.DELETE("/:id", ordersHandler.DeleteByID()) // Use the returned gin.HandlerFunc
+	productsGroup.GET("", ordersHandler.GetAll())
+}
+
 	}
+
+	// Status Route
+	router.GET("/status", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "Service is running"})
+	})
+
 
 	lgr.Info().Msg("Registered routes")
 	for _, item := range router.Routes() {
@@ -86,5 +105,6 @@ func WebRouter(svcEnv models.ServiceEnv, dbMgr db.MongoManager, lgr *logger.AppL
 			Str("path", item.Path).
 			Send()
 	}
+
 	return router
 }
